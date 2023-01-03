@@ -1,0 +1,10 @@
+.card {
+  background: #FFFFFF;
+  box-shadow: 0px 4px 12px rgba(0, 0, 0, 0.05);
+  border-radius: 16px;
+  background-color: hsl(0, 0%, 100%);
+
+  &--large {
+    border-radius: 12px;
+  }
+}

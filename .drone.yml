@@ -1,0 +1,149 @@
+kind: pipeline
+name: {{ cookiecutter.project_name_pretty_platform }}
+
+definitions:
+  environment: &environment
+    image: yaroappello/mobile-ci:latest
+    environment:
+      AWS_ACCESS_KEY_ID:
+        from_secret: aws_access_key_id
+      AWS_SECRET_ACCESS_KEY:
+        from_secret: aws_secret_access_key
+      CHANNEL_ID: {{ cookiecutter.slack_channel }}
+      SLACK_API_TOKEN:
+        from_secret: slack_token
+  slack_commands1: &error_slack_message_commands
+    commands:
+      - /notify_slack.py $SLACK_API_TOKEN $CHANNEL_ID "❌ Web front end app build/deployment failed!\n*$DRONE_COMMIT_REF*, ${DRONE_COMMIT_SHA:0:8}\nSee more $DRONE_BUILD_LINK"
+  slack_commands2: &success_slack_message_commands
+    commands:
+      - /notify_slack.py $SLACK_API_TOKEN $CHANNEL_ID "✅ Web front end app build/deployment succeeded!\n*$DRONE_COMMIT_REF*, ${DRONE_COMMIT_SHA:0:8}\nSee more $DRONE_BUILD_LINK"
+
+
+steps:
+# Dev
+- name: Build Development
+  image: node:16
+  commands:
+  - npm install --quiet
+  - npm run build
+  environment:
+    GOOGLE_MAPS_KEY: ''
+  when:
+    branch: dev
+    event:
+    - push
+    - pull_request
+
+- name: Deploy Development to S3 & Invalidate CloudFront Cache
+  image: samepagelabs/awscli:latest
+  environment:
+    AWS_ACCESS_KEY_ID:
+      from_secret: {{ cookiecutter.aws_ci_access_key_name_dev }}
+    AWS_SECRET_ACCESS_KEY:
+      from_secret: {{ cookiecutter.aws_ci_secret_key_name_dev }}
+    S3_URL: s3://{{ cookiecutter.s3_bucket_dev }}
+    CDN_DISTRIBUTION_ID: {{ cookiecutter.cloudfront_dist_id_dev }}
+  commands:
+  - aws s3 rm $S3_URL/previous --recursive
+  - aws s3 mv $S3_URL/latest $S3_URL/previous --recursive
+  - aws s3 sync ./build $S3_URL/latest
+  - aws cloudfront create-invalidation --distribution-id $CDN_DISTRIBUTION_ID --paths "/*"
+  when:
+    branch: dev
+    event:
+    - push
+    # - pull_request
+
+# Staging
+- name: Build Staging
+  image: node:16
+  commands:
+  - npm install --quiet
+  - npm run build
+  environment:
+    GOOGLE_MAPS_KEY: ''
+  when:
+    branch: stage
+    event:
+    - push
+    - pull_request
+
+- name: Deploy Staging to S3 & Invalidate CloudFront Cache
+  image: samepagelabs/awscli:latest
+  environment:
+    AWS_ACCESS_KEY_ID:
+      from_secret: {{ cookiecutter.aws_ci_access_key_name_stage }}
+    AWS_SECRET_ACCESS_KEY:
+      from_secret: {{ cookiecutter.aws_ci_secret_key_name_stage }}
+    S3_URL: s3://{{ cookiecutter.s3_bucket_stage }}
+    CDN_DISTRIBUTION_ID: {{ cookiecutter.cloudfront_dist_id_stage }}
+  commands:
+  - aws s3 rm $S3_URL/previous --recursive
+  - aws s3 mv $S3_URL/latest $S3_URL/previous --recursive
+  - aws s3 sync ./build $S3_URL/latest
+  - aws cloudfront create-invalidation --distribution-id $CDN_DISTRIBUTION_ID --paths "/*"
+  when:
+    branch: stage
+    event:
+    - push
+    # - pull_request
+
+# # Production (Keep commented out before deploying on produciton)
+# - name: Build Production
+#   image: node:16
+#   commands:
+#   - npm install --quiet
+#   - npm run build
+#   environment:
+#     GOOGLE_MAPS_KEY: ''
+#   when:
+#     branch: master
+#     event:
+#     - push
+#     - pull_request
+
+# - name: Deploy Production to S3 & Invalidate CloudFront Cache
+#   image: samepagelabs/awscli:latest
+#   environment:
+#     AWS_ACCESS_KEY_ID:
+#       from_secret: {{ cookiecutter.aws_ci_access_key_name_prod }}
+#     AWS_SECRET_ACCESS_KEY:
+#       from_secret: {{ cookiecutter.aws_ci_secret_key_name_prod }}
+#     S3_URL: s3://{{ cookiecutter.s3_bucket_prod }}
+#     CDN_DISTRIBUTION_ID: {{ cookiecutter.cloudfront_dist_id_prod }}
+#   commands:
+#   - aws s3 rm $S3_URL/previous --recursive
+#   - aws s3 mv $S3_URL/latest $S3_URL/previous --recursive
+#   - aws s3 sync ./build $S3_URL/latest
+#   - aws cloudfront create-invalidation --distribution-id $CDN_DISTRIBUTION_ID --paths "/*"
+#   when:
+#     branch: master
+#     event:
+#     - push
+#     # - pull_request
+
+# Slack notifications
+- name: Notify Slack about success
+    <<: [*environment, *success_slack_message_commands]
+    when:
+      branch:
+      - dev
+      - stage
+      - master
+      status:
+      - success
+
+- name: Notify Slack about failure
+    <<: [*environment, *error_slack_message_commands]
+    when:
+      branch:
+      - dev
+      - stage
+      - master
+      status:
+      - failure
+
+# Pull Docker secrets
+image_pull_secrets:
+- dockerconfigjson
